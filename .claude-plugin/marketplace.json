@@ -1,0 +1,13 @@
+{
+  "name": "jesse-local",
+  "owner": { "name": "Jesse7073" },
+  "metadata": { "description": "Jesse 的 Claude Code plugin 市集" },
+  "plugins": [
+    {
+      "name": "subagent-panel",
+      "source": "./plugins/subagent-panel",
+      "description": "顯示每個 subagent 的任務、模型、步驟進度的可展開/收合面板",
+      "version": "1.1.0"
+    }
+  ]
+}

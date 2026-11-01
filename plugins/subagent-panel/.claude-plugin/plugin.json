@@ -1,0 +1,7 @@
+{
+  "name": "subagent-panel",
+  "version": "1.1.0",
+  "description": "顯示每個 subagent 的任務、模型、步驟進度的可展開/收合面板",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}

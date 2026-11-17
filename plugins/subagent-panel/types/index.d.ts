@@ -1,4 +1,5 @@
-export type StepState = 'done' | 'current' | 'pending'
+/** unreported：subagent 結束時這一步還沒回報完成，不知道到底做了沒 */
+export type StepState = 'done' | 'current' | 'pending' | 'unreported'
 
 /** 一個步驟：工具呼叫或 subagent 自己寫的待辦項目 */
 /** active：進行中時顯示的文字（TaskCreate／TodoWrite 的 activeForm） */

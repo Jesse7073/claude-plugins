@@ -292,3 +292,82 @@ test('hidden while above the prompt: a one-line button brings the panel back', a
   expect(await band.find({ type: 'Text', text: /docs/ })).toBeDefined()
   await band.unmount()
 })
+
+const STEP_TOOL = 'mcp__subagent-panel__step_status'
+const PLAN_TOOL = 'mcp__subagent-panel__plan_steps'
+
+async function startWithPlan(
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  on: Parameters<Parameters<typeof test>[1]>[1],
+  statuses: Array<'completed' | 'in_progress'>,
+) {
+  stubs(on, true)
+  on('turn.complete', () => ({ text: 'done' }))
+  on('classic.SubagentStop', () => ({}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.agent.spawn({ prompt: 'go', description: 'docs', subagentType: 'general-purpose' })
+  await $.tool.call({ tool: PLAN_TOOL, agentId: 'b1', steps: ['read src', 'read pom', 'summarize'] })
+  for (const [at, status] of statuses.entries()) {
+    await $.tool.call({ tool: STEP_TOOL, agentId: 'b1', step: at + 1, status })
+  }
+}
+
+function stopEvent(agentId: string, isActive: boolean) {
+  return { agent_id: agentId, stop_hook_active: isActive, agent_type: 'general-purpose', agent_transcript_path: '/t.jsonl' }
+}
+
+test('subagent 要結束但步驟沒回報完：攔一次，列出沒回報的步驟', async ($, on) => {
+  await startWithPlan($, on, ['completed', 'in_progress'])
+  const result = await $.classic.SubagentStop(stopEvent('b1', false))
+  expect(result.block).toContain('2. read pom')
+  expect(result.block).toContain('3. summarize')
+  expect(result.block).not.toContain('1. read src')
+})
+
+test('subagent 結束時不攔：已經攔過、全部完成、找不到這個 subagent', async ($, on) => {
+  await startWithPlan($, on, ['completed', 'in_progress'])
+  expect((await $.classic.SubagentStop(stopEvent('b1', true))).block).toBeUndefined()
+  expect((await $.classic.SubagentStop(stopEvent('nobody', false))).block).toBeUndefined()
+
+  await $.tool.call({ tool: STEP_TOOL, agentId: 'b1', step: 2, status: 'completed' })
+  await $.tool.call({ tool: STEP_TOOL, agentId: 'b1', step: 3, status: 'completed' })
+  expect((await $.classic.SubagentStop(stopEvent('b1', false))).block).toBeUndefined()
+})
+
+test('subagent 沒有計畫時結束不攔', async ($, on) => {
+  stubs(on, true)
+  on('classic.SubagentStop', () => ({}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.agent.spawn({ prompt: 'go', description: 'no plan', subagentType: 'general-purpose' })
+  await $.tool.call({ tool: 'Read', file_path: '/a', agentId: 'b1' })
+  expect((await $.classic.SubagentStop(stopEvent('b1', false))).block).toBeUndefined()
+})
+
+test('turn.complete 後沒完成的步驟變未回報，之後回報可改回完成', async ($, on) => {
+  await startWithPlan($, on, ['completed', 'in_progress'])
+  await $.turn.complete({ agentId: 'b1', answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /read src/ }))?.text).toBe('  ├ ✓ read src')
+  expect((await ui.find({ type: 'Text', text: /read pom/ }))?.text).toBe('  ├ ? read pom（未回報）')
+  expect((await ui.find({ type: 'Text', text: /summarize/ }))?.text).toBe('  └ ? summarize（未回報）')
+  await ui.unmount()
+
+  await $.tool.call({ tool: STEP_TOOL, agentId: 'b1', step: 2, status: 'completed' })
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await again.find({ type: 'Text', text: /read pom/ }))?.text).toBe('  ├ ✓ read pom')
+  expect((await again.find({ type: 'Text', text: /summarize/ }))?.text).toBe('  └ ? summarize（未回報）')
+  await again.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface}：面板畫出「未回報」步驟與「N 步未回報」`, async ($, on) => {
+    await startWithPlan($, on, ['completed', 'in_progress'])
+    await $.turn.complete({ agentId: 'b1', answer: 'done', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /未回報\）/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /2 步未回報/ })).toBeDefined()
+    await ui.unmount()
+  })
+}

@@ -100,6 +100,16 @@ const PLAN_INSTRUCTION =
   '步驟描述請用一般人看得懂的白話（例如「查詢使用者資料表的欄位」「跑後端單元測試」），不要寫指令；' +
   '呼叫 Bash／PowerShell 時，description 參數也請用一句繁體中文白話說明這個指令在做什麼。）'
 
+/** 計畫裡還沒回報完成的步驟（編號從 1 開始） */
+function unfinishedSteps(row: AgentRow): Array<{ number: number; label: string }> {
+  if (row.plan === null || row.plan.length === 0) {
+    return []
+  }
+  return row.plan
+    .map((step, at) => ({ number: at + 1, label: step.label, state: step.state }))
+    .filter(step => step.state !== 'done')
+}
+
 function clip(text: string, max: number): string {
   const one = text.replace(/\s+/g, ' ').trim()
   return one.length > max ? one.slice(0, max - 1) + '…' : one
@@ -163,7 +173,9 @@ function progressOf(row: AgentRow): string {
     const done = row.plan.filter(step => step.state === 'done').length
     const at = row.plan.findIndex(step => step.state === 'current')
     const position = at >= 0 ? at + 1 : done
-    return `步驟 ${position}/${row.plan.length}`
+    const unreported = row.plan.filter(step => step.state === 'unreported').length
+    const tail = unreported > 0 ? ` · ${unreported} 步未回報` : ''
+    return `步驟 ${position}/${row.plan.length}${tail}`
   }
   const count = row.calls.length
   if (row.status === 'running') {
@@ -478,6 +490,11 @@ export const register: Register = on => {
           status,
           endedAt: now,
           calls: row.calls.map(step => (step.state === 'current' ? { ...step, state: 'done' as const } : step)),
+          // 計畫裡沒回報完成的步驟：不知道到底做了沒，標成未回報
+          plan:
+            row.plan === null
+              ? null
+              : row.plan.map(step => (step.state === 'done' ? step : { ...step, state: 'unreported' as const })),
         })),
       )
       const row = (await read($, agents)).find(one => one.id === agentId)
@@ -493,6 +510,25 @@ export const register: Register = on => {
     return next(e)
   })
 
+
+  // 4b. subagent 要結束時，計畫還有步驟沒回報就攔一次，請它補回報
+  on('classic.SubagentStop', async ($, e, next) => {
+    if (e.stop_hook_active) {
+      return next(e) // 已經攔過一次，不再攔，避免無限循環
+    }
+    const row = (await read($, agents)).find(one => one.id === e.agent_id)
+    const unfinished = row === undefined ? [] : unfinishedSteps(row)
+    if (unfinished.length === 0) {
+      return next(e)
+    }
+    const listing = unfinished.map(step => `${step.number}. ${step.label}`).join('；')
+    return {
+      block:
+        `你用 ${PLAN_TOOL} 列的步驟還有這些沒回報完成：${listing}。` +
+        `做完的步驟請用 ${STEP_TOOL} 標成 completed；沒做的不要標，在最後回報裡說明原因。` +
+        '補完回報就結束，不要重做工作。',
+    }
+  })
 
   // 5. 使用者自己按掉側邊欄 = 隱藏
   on('ui.close', async ($, e, next) => {
@@ -785,10 +821,12 @@ async function bodyLines(
 
       const stepLine = (step: Step, isLast: boolean, openKey: string, canOpen: boolean, isStepOpen: boolean) => {
         const label = step.state === 'current' && step.active !== undefined ? step.active : step.label
-        const mark = step.state === 'current' ? '▶' : step.state === 'done' ? '✓' : '○'
-        const markColor = step.state === 'current' ? 'claude' : step.state === 'done' ? 'success' : 'subtle'
+        const mark = step.state === 'current' ? '▶' : step.state === 'done' ? '✓' : step.state === 'unreported' ? '?' : '○'
+        const markColor =
+          step.state === 'current' ? 'claude' : step.state === 'done' ? 'success' : step.state === 'unreported' ? 'warning' : 'subtle'
         const fold = canOpen ? (isStepOpen ? ' ▴' : ' ▾') : ''
-        const text = clipColumns(label, Math.max(8, width - 8 - fold.length))
+        const suffix = step.state === 'unreported' ? '（未回報）' : ''
+        const text = clipColumns(label, Math.max(8, width - 8 - fold.length - suffix.length)) + suffix
         const body = (
           <Text wrap="truncate">
             <Text color="subtle">

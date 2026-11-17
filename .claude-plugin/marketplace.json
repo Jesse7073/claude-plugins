@@ -7,7 +7,7 @@
       "name": "subagent-panel",
       "source": "./plugins/subagent-panel",
       "description": "顯示每個 subagent 的任務、模型、步驟進度的可展開/收合面板",
-      "version": "1.1.0"
+      "version": "1.2.0"
     }
   ]
 }
